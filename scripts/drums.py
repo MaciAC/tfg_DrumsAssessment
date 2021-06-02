@@ -59,7 +59,7 @@ def SliceDrums_BeatDetection(folder, audio_filename, annotations, fs):
     zero_array = t * 0 #used only for plotting purposes
 
     #Plotting
-    f, axarr = plt.subplots(3,1,figsize=(13, 4))
+    f, axarr = plt.subplots(3,1,figsize=(130, 40))
     axarr[0].plot(t,x); axarr[0].axis('off')
 
     #Essentia beat tracking
@@ -85,7 +85,62 @@ def SliceDrums_BeatDetection(folder, audio_filename, annotations, fs):
    
     for i, onset in enumerate(onsets_list):
         sample = int(onset * fs) - 1000
-        samplename =  "{}slices/{}_{}.wav".format(folder, annotations[i][1], str(i))
+        samplename =  "{}slices/{}{}_{}.wav".format(folder, str(len(str(i))), str(i), annotations[i][1])
+        if(i >=  len(onsets_list)-1):
+            next_sample = len(x) 
+        else:
+            next_sample = int(onsets_list[i+1]*fs) - 1000
+        x_seg = x[sample  :  next_sample]
+        MonoWriter(filename=samplename)(x_seg)
+        
+    return onsets_list, duration
+
+
+
+def SliceDrums_BeatDetection_blind(folder, audio_filename, fs):
+    od_complex = OnsetDetection(method = 'complex')
+    w = Windowing(type = 'hann')
+    fft = FFT() # this gives us a complex FFT
+    c2p = CartesianToPolar() # and this turns it into a pair (magnitude, phase)
+    onsets = Onsets()
+
+    x = MonoLoader(filename = folder + audio_filename, sampleRate = fs)()
+    duration = float(len(x)) / fs
+
+    x = x / np.max(np.abs(x))
+    
+    t = np.arange(len(x)) / float(fs)
+    
+    zero_array = t * 0 #used only for plotting purposes
+
+    #Plotting
+    f, axarr = plt.subplots(3,1,figsize=(130, 40))
+    axarr[0].plot(t,x); axarr[0].axis('off')
+
+    #Essentia beat tracking
+    pool = Pool()
+    for frame in FrameGenerator(x, frameSize = 1024, hopSize = 512):
+        mag, phase, = c2p(fft(w(frame)))
+        pool.add('features.complex', od_complex(mag, phase))
+
+
+    onsets_list = onsets(array([pool['features.complex']]), [1])
+
+    axarr[1].plot(t,zero_array);axarr[1].set_title('Onsets detected using complex spectral difference');
+    axarr[1].axis('off')
+    axarr[1].vlines(onsets_list, -1, 1, color = 'b')
+
+    #Beat tracking
+    beatTracker = BeatTrackerDegara()#Essentia-bug: reset function fails, so re-created
+    ticks = beatTracker(x)
+
+    axarr[2].plot(t,zero_array);axarr[2].set_title('Beats estimated');
+    axarr[2].axis('off')
+    axarr[2].vlines(ticks, -1, 1, color = 'r')
+   
+    for i, onset in enumerate(onsets_list):
+        sample = int(onset * fs) - 1000
+        samplename =  "{}slices/{}{}__blind.wav".format(folder, str(len(str(i))), str(i))
         if(i >=  len(onsets_list)-1):
             next_sample = len(x) 
         else:
