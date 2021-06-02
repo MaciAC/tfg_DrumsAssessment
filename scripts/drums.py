@@ -42,7 +42,55 @@ def get_time_steps_from_annotations(annotations):
                 inter_idx_step = 0
     return notes, np.array(time_steps), np.array(beats)           
 
-def SliceDrums_BeatDetection(folder, audio_filename, fs):
+
+def SliceDrums_BeatDetection(folder, audio_filename, annotations, fs):
+    od_complex = OnsetDetection(method = 'hfc')
+    w = Windowing(type = 'hann')
+    fft = FFT() # this gives us a complex FFT
+    c2p = CartesianToPolar() # and this turns it into a pair (magnitude, phase)
+    onsets = Onsets()
+
+    x = MonoLoader(filename = folder + audio_filename, sampleRate = fs)()
+    duration = float(len(x)) / fs
+
+    x = x / np.max(np.abs(x))
+    
+    t = np.arange(len(x)) / float(fs)
+    
+    zero_array = t * 0 #used only for plotting purposes
+
+    #Plotting
+    f, axarr = plt.subplots(2,1,figsize=(90, 40))
+    axarr[0].plot(t,x); axarr[0].axis('off')
+
+    #Essentia beat tracking
+    pool = Pool()
+    for frame in FrameGenerator(x, frameSize = 1024, hopSize = 512):
+        mag, phase, = c2p(fft(w(frame)))
+        pool.add('features.complex', od_complex(mag, phase))
+
+
+    onsets_list = onsets(array([pool['features.complex']]), [1])
+
+    axarr[1].plot(t,zero_array);axarr[1].set_title('Onsets detected using complex spectral difference');
+    axarr[1].axis('off')
+    axarr[1].vlines(onsets_list, -1, 1, color = 'b')
+   
+    for i, onset in enumerate(onsets_list):
+        sample = int(onset * fs) - 1000
+        samplename =  "{}slices/{}{}_{}.wav".format(folder, str(len(str(i))), str(i), annotations[i][1])
+        if(i >=  len(onsets_list)-1):
+            next_sample = len(x) 
+        else:
+            next_sample = int(onsets_list[i+1]*fs) - 1000
+        x_seg = x[sample  :  next_sample]
+        MonoWriter(filename=samplename)(x_seg)
+        
+    return onsets_list, duration
+
+
+
+def SliceDrums_BeatDetection_blind(folder, audio_filename, fs):
     od_complex = OnsetDetection(method = 'hfc')
     w = Windowing(type = 'hann')
     fft = FFT() # this gives us a complex FFT
@@ -78,7 +126,7 @@ def SliceDrums_BeatDetection(folder, audio_filename, fs):
     #Beat tracking
     beatTracker = BeatTrackerDegara()#Essentia-bug: reset function fails, so re-created
     ticks = beatTracker(x)
-   
+    plt.show()
     for i, onset in enumerate(onsets_list):
         sample = int(onset * fs) - 1000
         samplename =  "{}slices/{}{}__blind.wav".format(folder, str(len(str(i))), str(i))
@@ -90,3 +138,29 @@ def SliceDrums_BeatDetection(folder, audio_filename, fs):
         MonoWriter(filename=samplename)(x_seg)
         
     return onsets_list, duration
+
+def assess_notes(events, y_pred_):
+  notes_correct = np.array([i==j for i, j in zip(events, y_pred_)]) * 1.0
+  for i, note in enumerate(notes_correct):
+    if note == 0:
+      pred = y_pred_[i].split('+')
+      for p in pred:
+        if p in events[i].split('+') and p != 'hh':
+          notes_correct[i] = 0.75
+  return notes_correct
+
+def map_onsets_with_events(onsets_detected, onsets_expected, y_pred):
+  distance=60.0
+  mapped = ['no']*len(onsets_expected)
+  for onset, predicted in zip(onsets_detected, y_pred):
+    for i, expected in enumerate(onsets_expected):
+      if abs(onset - expected) < distance:
+        distance = abs(onset - expected)
+      else:
+        mapped[i-1] = predicted
+        distance=60.0
+        break   
+  if abs(onset - expected) < 0.01:
+      mapped[-1] = predicted
+
+  return mapped
